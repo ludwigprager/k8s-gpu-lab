@@ -1,0 +1,4 @@
+.bin/
+.helm/
+data/
+kubeconfig

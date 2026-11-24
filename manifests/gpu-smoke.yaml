@@ -1,0 +1,15 @@
+# GPU smoke test: CUDA vectorAdd sample, prints "Test PASSED" on success
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cuda-vectoradd
+  namespace: default
+spec:
+  restartPolicy: Never
+  runtimeClassName: ${GPU_RUNTIME_CLASS}
+  containers:
+    - name: cuda-vectoradd
+      image: ${CUDA_SAMPLE_IMAGE}
+      resources:
+        limits:
+          nvidia.com/gpu: 1

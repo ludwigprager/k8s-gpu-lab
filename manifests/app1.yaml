@@ -1,0 +1,109 @@
+# app1: client application that needs model1
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app1
+  namespace: ${NAMESPACE}
+  labels: {app: app1}
+spec:
+  # no "replicas": the KEDA HTTP add-on owns the count
+  selector:
+    matchLabels: {app: app1}
+  template:
+    metadata:
+      labels: {app: app1}
+    spec:
+      containers:
+        - name: app1
+          image: ${APP1_IMAGE}
+          command: ["python", "-u", "/app/app.py"]
+          env:
+            - name: OPENAI_BASE_URL
+              value: http://model1.${NAMESPACE}.svc.cluster.local:8000/v1
+            - name: OPENAI_MODEL
+              value: model1
+            - name: OPENAI_API_KEY
+              valueFrom: {secretKeyRef: {name: model1-secrets, key: VLLM_API_KEY}}
+            - name: MODEL_WAIT_SECONDS    # how long app1 waits for a cold model1
+              value: "900"
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          volumeMounts:
+            - {name: code, mountPath: /app}
+      volumes:
+        - name: code
+          configMap: {name: app1-code}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: app1
+  namespace: ${NAMESPACE}
+spec:
+  selector: {app: app1}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# KEDA HTTP add-on: holds requests while app1 scales 0 -> 1
+apiVersion: http.keda.sh/v1alpha1
+kind: HTTPScaledObject
+metadata:
+  name: app1
+  namespace: ${NAMESPACE}
+spec:
+  hosts:
+    - ${APP1_HOST}
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: app1
+    service: app1
+    port: 8080
+  replicas:
+    min: 0
+    max: 3
+  scaledownPeriod: 900            # 15 min without traffic -> 0
+  scalingMetric:
+    requestRate:
+      targetValue: 20
+      window: 1m
+      granularity: 1s
+---
+# Ingress must go through the KEDA interceptor (namespace keda) -> ExternalName bridge
+apiVersion: v1
+kind: Service
+metadata:
+  name: keda-interceptor
+  namespace: ${NAMESPACE}
+spec:
+  type: ExternalName
+  externalName: keda-add-ons-http-interceptor-proxy.keda.svc.cluster.local
+  ports:
+    - port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app1
+  namespace: ${NAMESPACE}
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: ${APP1_HOST}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keda-interceptor
+                port: {number: 8080}

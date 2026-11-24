@@ -1,0 +1,184 @@
+# model1: vLLM serving ${MODEL_ID} as "model1" on one GPU
+# Model cache: host MODEL_CACHE_DIR -> /models in the GPU worker (kind extraMounts)
+# -> this hostPath PV -> /models in the pod. Survives deleting the namespace and the cluster.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: model1-cache-${NAMESPACE}
+spec:
+  capacity:
+    storage: 100Gi            # informational for hostPath; the host disk is the limit
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef: {namespace: "${NAMESPACE}", name: model1-cache}
+  hostPath:
+    path: /models
+    type: Directory           # must be the mount; never let kubelet create an empty dir
+  nodeAffinity:               # only the worker has the mount
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - {key: kubernetes.io/hostname, operator: In, values: ["${CLUSTER_NAME}-worker"]}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model1-cache
+  namespace: ${NAMESPACE}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: ""        # static PV above, not local-path
+  volumeName: model1-cache-${NAMESPACE}
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model1
+  namespace: ${NAMESPACE}
+  labels: {app: model1}
+spec:
+  # no "replicas": KEDA owns the count, and re-applying must not reset it
+  strategy:
+    type: Recreate            # old pod must free the GPU before the new one starts
+  selector:
+    matchLabels: {app: model1}
+  template:
+    metadata:
+      labels: {app: model1}
+    spec:
+      runtimeClassName: ${GPU_RUNTIME_CLASS}   # NVIDIA runtime in the kind node's containerd
+      securityContext:          # host user: files in the host cache dir stay removable without sudo
+        runAsUser: ${HOST_UID}
+        runAsGroup: ${HOST_GID}
+      containers:
+        - name: vllm
+          image: ${VLLM_IMAGE}
+          args:
+            - --model=${MODEL_ID}
+            - --served-model-name=model1
+            - --port=8000
+            - --gpu-memory-utilization=${GPU_MEM_UTIL}
+            - --max-model-len=${MAX_MODEL_LEN}
+          env:
+            - name: HF_HOME
+              value: /models
+            # the uid has no passwd entry in the image: give torch/triton a user name and
+            # a writable home; compile caches go to the persistent cache (faster cold starts)
+            - {name: HOME, value: /tmp}
+            - {name: USER, value: vllm}
+            - {name: LOGNAME, value: vllm}
+            - {name: VLLM_CACHE_ROOT, value: /models/vllm}
+            - {name: TRITON_CACHE_DIR, value: /models/triton}
+            - name: HF_TOKEN
+              valueFrom: {secretKeyRef: {name: model1-secrets, key: HF_TOKEN}}
+            - name: VLLM_API_KEY
+              valueFrom: {secretKeyRef: {name: model1-secrets, key: VLLM_API_KEY}}
+          ports:
+            - name: http
+              containerPort: 8000
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+          startupProbe:                 # model download + load can take minutes
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            failureThreshold: 90        # up to 15 min
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 30
+            failureThreshold: 3
+          volumeMounts:
+            - {name: cache, mountPath: /models}
+            - {name: shm, mountPath: /dev/shm}
+      volumes:
+        - name: cache
+          persistentVolumeClaim: {claimName: model1-cache}
+        - name: shm
+          emptyDir: {medium: Memory, sizeLimit: 2Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: model1
+  namespace: ${NAMESPACE}
+  labels: {app: model1}
+spec:
+  selector: {app: model1}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+# Prometheus scrapes vLLM /metrics (vllm:num_requests_waiting, ...)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: model1
+  namespace: ${NAMESPACE}
+spec:
+  selector:
+    matchLabels: {app: model1}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      authorization:              # /metrics is behind the API key
+        type: Bearer
+        credentials: {name: model1-secrets, key: VLLM_API_KEY}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: model1
+  namespace: ${NAMESPACE}
+spec:
+  scaleTargetRef:
+    name: model1
+  minReplicaCount: 0              # scale to zero -> GPU is freed
+  maxReplicaCount: ${MODEL_MAX_REPLICAS}
+  pollingInterval: 15
+  cooldownPeriod: 600             # 10 min without activity -> 0
+  triggers:
+    # 1) dependency: model1 runs while app1 has at least one pod
+    - type: kubernetes-workload
+      metadata:
+        podSelector: "app=app1"
+        value: "100"
+        activationValue: "0"
+    # 2) load: more replicas when requests queue up in vLLM
+    - type: prometheus
+      metadata:
+        serverAddress: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+        query: sum(vllm:num_requests_waiting{namespace="${NAMESPACE}", service="model1"}) or vector(0)
+        threshold: "5"
+        activationThreshold: "0"
+---
+# Only app1 and Prometheus may reach model1
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: model1-ingress
+  namespace: ${NAMESPACE}
+spec:
+  podSelector:
+    matchLabels: {app: model1}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app: app1}
+      ports:
+        - port: 8000
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8000
