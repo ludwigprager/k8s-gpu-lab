@@ -14,14 +14,15 @@ start=$SECONDS
 ./30-install-platform.sh      # GPU Operator, Prometheus, KEDA + HTTP add-on, traefik
 ./40-gpu-smoke-test.sh        # CUDA vectorAdd pod on the GPU
 ./50-deploy-apps.sh           # model1 (vLLM) + app1
+./80-test.sh                  # end-to-end: one question through Ingress -> KEDA -> app1 -> model1
 
 elapsed=$((SECONDS - start))
 cat <<EOF
 
 Done in $((elapsed / 60)) min $((elapsed % 60)) s. Next:
-  ./80-test.sh "Why is the sky blue?"   one request through Ingress -> KEDA -> app1 -> model1
+  ./80-test.sh "Why is the sky blue?"   ask your own question through the same chain
   ./90-delete.sh                        remove apps (--all: platform, --cluster: whole cluster)
-  ./99-teardown.sh                      remove everything; then the clone can be deleted
-  export KUBECONFIG=\$PWD/kubeconfig     use kubectl/helm by hand (tools in ./.bin)
+  ./99-teardown.sh                      stop everything (downloads stay); then the clone can be deleted
+  export KUBECONFIG=\$PWD/kubeconfig PATH=\$PWD/.bin:\$PATH   use kubectl/helm by hand
 Both deployments scale to 0 when idle: app1 after ~15 min, model1 ~10 min later.
 EOF

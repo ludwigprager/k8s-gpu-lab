@@ -67,7 +67,7 @@ e.g. `MODEL_ID=Qwen/Qwen2.5-1.5B-Instruct ./10-start.sh`.
 | `30-install-platform.sh` | GPU Operator (driver and toolkit off), Prometheus, KEDA + HTTP add-on, traefik |
 | `40-gpu-smoke-test.sh` | CUDA vectorAdd pod |
 | `50-deploy-apps.sh` | secret, app1 code ConfigMap, `manifests/model1.yaml`, `manifests/app1.yaml` |
-| `80-test.sh` | port-forward to traefik, sends `/ask` |
+| `80-test.sh` | port-forward to traefik, sends `/ask`; fails on an error answer. `10-start.sh` runs it last as the end-to-end check |
 | `90-delete.sh` | cleanup inside the cluster, or `--cluster` |
 | `99-teardown.sh` | stops what the lab started: leftover port-forward, cluster with all workloads, unused `kind` network, kubeconfig; keeps the downloads (`.bin/`, `.helm/`, model cache); prints `sudo ./host-settings.sh off` if the lab's host settings are on |
 

@@ -84,14 +84,17 @@ for node in $(kubectl get nodes -o name | cut -d/ -f2); do
 done
 [[ "$gpu_nodes" -gt 0 ]] || die "no node sees a GPU; check: nvkind cluster print-gpus --name=$CLUSTER_NAME"
 
-# RuntimeClass used by the GPU pods (the GPU Operator also creates it; harmless if it exists)
-kubectl apply -f - <<EOF
+# RuntimeClass used by the GPU pods. nvkind (and later the GPU Operator) create it already;
+# create it only if missing, since apply on their object warns about a missing annotation.
+if ! kubectl get runtimeclass "$GPU_RUNTIME_CLASS" >/dev/null 2>&1; then
+  kubectl apply -f - <<EOF
 apiVersion: node.k8s.io/v1
 kind: RuntimeClass
 metadata:
   name: $GPU_RUNTIME_CLASS
 handler: nvidia
 EOF
+fi
 
 log "Cluster ready: $gpu_nodes node(s) with GPU"
 kubectl get nodes
