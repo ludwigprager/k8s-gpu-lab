@@ -3,7 +3,7 @@
 # localhost -> traefik -> KEDA interceptor -> app1 -> model1
 # Usage: ./20-test.sh "Why is the sky blue?"
 source "$(dirname "$0")/lib.sh"
-need kubectl
+need_bin kubectl
 need curl
 
 question="${1:-Explain in one sentence what a GPU does.}"

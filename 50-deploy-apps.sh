@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Step 50: deploys model1 (vLLM) and app1 into $NAMESPACE. Safe to re-run.
 source "$(dirname "$0")/lib.sh"
-need kubectl
-need envsubst "(package gettext-base)"
+need_bin kubectl
 
 log "Deploying app1 + model1 into namespace $NAMESPACE"
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -

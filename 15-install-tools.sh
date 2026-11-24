@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Step 15: pinned tools into ./.bin (no sudo, nothing installed on the host).
 #   nvkind   built from source in a golang container (needs cgo for go-nvml)
+#   kind     KIND_VERSION (nvkind calls the kind CLI)
 #   kubectl  KUBECTL_VERSION
 #   helm     HELM_VERSION
 # Each tool sits behind a checkpoint file naming its version; changing the version re-installs it.
@@ -28,6 +29,13 @@ if ! installed nvkind "$NVKIND_VERSION"; then
   mark nvkind "$NVKIND_VERSION"
 fi
 
+if ! installed kind "$KIND_VERSION"; then
+  log "Downloading kind $KIND_VERSION"
+  curl -fsSLo "$BIN/kind" "https://kind.sigs.k8s.io/dl/v$KIND_VERSION/kind-$os-$arch"
+  chmod +x "$BIN/kind"
+  mark kind "$KIND_VERSION"
+fi
+
 if ! installed kubectl "$KUBECTL_VERSION"; then
   log "Downloading kubectl $KUBECTL_VERSION"
   curl -fsSLo "$BIN/kubectl" "https://dl.k8s.io/release/v$KUBECTL_VERSION/bin/$os/$arch/kubectl"
@@ -47,5 +55,6 @@ fi
 
 log "Tools in $BIN"
 printf '  nvkind  %s\n' "$NVKIND_VERSION"
+printf '  kind    %s\n' "$(kind version | cut -d' ' -f2)"
 printf '  kubectl %s\n' "$(kubectl version --client -o json | sed -n 's/.*"gitVersion": "\(.*\)".*/\1/p')"
 printf '  helm    %s\n' "$(helm version --short)"

@@ -5,8 +5,8 @@
 #   KEDA + HTTP add-on  scale-to-zero for model1 and app1
 #   traefik           ingress controller
 source "$(dirname "$0")/lib.sh"
-need kubectl
-need helm
+need_bin kubectl
+need_bin helm
 
 log "Adding Helm repositories"
 helm repo add nvidia https://helm.ngc.nvidia.com/nvidia >/dev/null

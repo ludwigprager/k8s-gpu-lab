@@ -9,20 +9,20 @@ source "$(dirname "$0")/lib.sh"
 case "${1:-}" in
   --cluster)
     log "Deleting kind cluster $CLUSTER_NAME"
-    kind_nodes | xargs -r docker rm -f -v >/dev/null   # -v: the nodes' anonymous /var volumes
+    delete_cluster
     exit 0
     ;;
   ""|--all) ;;
   *) die "unknown option: $1" ;;
 esac
 
-need kubectl
+need_bin kubectl
 log "Deleting namespace $NAMESPACE (app1, model1) and PV model1-cache-$NAMESPACE"
 kubectl delete namespace "$NAMESPACE" --ignore-not-found --wait
 kubectl delete pv "model1-cache-$NAMESPACE" --ignore-not-found
 
 if [[ "${1:-}" == "--all" ]]; then
-  need helm
+  need_bin helm
   log "Uninstalling platform charts"
   helm uninstall traefik -n traefik || true
   helm uninstall http-add-on -n keda || true

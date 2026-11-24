@@ -1,50 +1,39 @@
 #!/usr/bin/env bash
 # Step 20: kind cluster with GPU access, created with nvkind.
-#   --setup-host  apply the two host settings (sudo) if missing
 #   --recreate    delete an existing cluster of the same name first
 # Without --recreate an existing cluster is kept and only verified.
+# Missing NVIDIA host settings are printed as a sudo command line; this script never runs sudo.
 source "$(dirname "$0")/lib.sh"
 
-SETUP_HOST=false
 RECREATE=false
 for arg in "$@"; do
   case "$arg" in
-    --setup-host) SETUP_HOST=true ;;
     --recreate)   RECREATE=true ;;
     *) die "unknown option: $arg" ;;
   esac
 done
 
 need docker
-need kubectl
+need_bin kubectl
 need nvidia-ctk "(NVIDIA Container Toolkit on the host)"
 
 # ---------------------------------------------------------------- host settings
-NVCONF=/etc/nvidia-container-runtime/config.toml
-
-default_runtime_ok() { [[ "$(docker info --format '{{.DefaultRuntime}}')" == "nvidia" ]]; }
-volume_mounts_ok()   { grep -Eq '^\s*accept-nvidia-visible-devices-as-volume-mounts\s*=\s*true' "$NVCONF" 2>/dev/null; }
-
+# The numbered scripts never run sudo: changing the host is the user's step (host-settings.sh).
 log "Checking host settings"
-if ! default_runtime_ok || ! volume_mounts_ok; then
-  if [[ "$SETUP_HOST" == true ]]; then
-    warn "applying host settings (sudo); Docker restarts, running containers stop briefly"
-    sudo nvidia-ctk runtime configure --runtime=docker --set-as-default
-    sudo nvidia-ctk config --set accept-nvidia-visible-devices-as-volume-mounts=true --in-place
-    sudo systemctl restart docker
-    if ! default_runtime_ok || ! volume_mounts_ok; then die "host settings still not active"; fi
-  else
-    default_runtime_ok || warn "Docker default runtime is not 'nvidia'"
-    volume_mounts_ok   || warn "accept-nvidia-visible-devices-as-volume-mounts is not true in $NVCONF"
-    die "host not prepared. Run once with --setup-host, or manually:
-   sudo nvidia-ctk runtime configure --runtime=docker --set-as-default
-   sudo nvidia-ctk config --set accept-nvidia-visible-devices-as-volume-mounts=true --in-place
-   sudo systemctl restart docker"
-  fi
+default_runtime_ok || warn "Docker default runtime is not 'nvidia'"
+volume_mounts_ok   || warn "accept-nvidia-visible-devices-as-volume-mounts is not true in $NVCONF"
+inotify_ok         || warn "inotify limits too low for kind (max_user_instances < 512 or max_user_watches < 524288)"
+if ! default_runtime_ok || ! volume_mounts_ok || ! inotify_ok; then
+  printf '\nThe host is not prepared for this lab. Run this once in a terminal:\n\n  sudo %s/host-settings.sh on\n\n' "$ROOT" >&2
+  default_runtime_ok || printf '%s\n' \
+    "It restarts Docker, which briefly stops all running containers (those with a restart policy" \
+    "come back), and 'nvidia' becomes the default runtime for every container on this host." >&2
+  die "then re-run ./10-start.sh"
 fi
-log "Host OK (default runtime nvidia, volume-mount GPU selection on)"
+log "Host OK (default runtime nvidia, volume-mount GPU selection on, inotify limits raised)"
 
-need nvkind "(run ./15-install-tools.sh)"
+need_bin nvkind
+need_bin kind
 [[ -d "$MODEL_CACHE_PATH" ]] || die "$MODEL_CACHE_PATH missing (run ./11-create-dirs.sh)"
 
 # ---------------------------------------------------------------- cluster
@@ -59,7 +48,7 @@ has_cache_mount() {
 if exists; then
   if [[ "$RECREATE" == true ]]; then
     log "Deleting existing cluster $CLUSTER_NAME"
-    kind_nodes | xargs -r docker rm -f -v >/dev/null   # -v: the nodes' anonymous /var volumes
+    delete_cluster
   elif ! has_cache_mount; then
     die "cluster $CLUSTER_NAME has no $MODEL_CACHE_PATH -> /models mount; run with --recreate"
   else
@@ -84,9 +73,12 @@ kubectl config use-context "kind-$CLUSTER_NAME" >/dev/null
 log "Verifying GPU access inside the nodes"
 gpu_nodes=0
 for node in $(kubectl get nodes -o name | cut -d/ -f2); do
-  if docker exec "$node" nvidia-smi -L 2>/dev/null; then
+  # the control plane has no nvidia-smi at all: ask quietly, print only for GPU nodes
+  if out="$(docker exec "$node" sh -c 'command -v nvidia-smi >/dev/null && nvidia-smi -L' 2>/dev/null)"; then
+    echo "$node: $out"
     gpu_nodes=$((gpu_nodes + 1))
-    docker exec "$node" grep -q nvidia /etc/containerd/config.toml \
+    # the toolkit writes a drop-in (conf.d/99-nvidia.toml): check the effective config, not config.toml
+    docker exec "$node" containerd config dump 2>/dev/null | grep -q 'runtimes\.nvidia\]' \
       || warn "node $node sees the GPU, but containerd has no 'nvidia' runtime"
   fi
 done

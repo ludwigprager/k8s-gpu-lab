@@ -2,8 +2,8 @@
 # Brings everything up, step by step. Each step can also be run on its own.
 # Works on a fresh clone; ./99-teardown.sh reverses it.
 #   ./10-start.sh                first run / re-run (keeps an existing cluster)
-#   ./10-start.sh --setup-host   also apply the NVIDIA host settings (sudo, restarts Docker)
 #   ./10-start.sh --recreate     delete and recreate the kind cluster
+# If the NVIDIA host settings are missing, it prints the sudo command to run once and stops.
 set -euo pipefail
 cd "$(dirname "$0")"
 start=$SECONDS

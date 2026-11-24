@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Step 40: proves that a pod can use the GPU (CUDA vectorAdd, prints "Test PASSED").
 source "$(dirname "$0")/lib.sh"
-need kubectl
+need_bin kubectl
 
 log "GPU smoke test (CUDA vectorAdd)"
 kubectl delete pod cuda-vectoradd -n default --ignore-not-found >/dev/null
